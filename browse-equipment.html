@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ICTRAX | Browse Equipment — CEU Malolos</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/styles.css">
+</head>
+<body data-page="browse">
+<div id="app-shell">
+  <aside id="sidebar"></aside>
+  <div id="main-col">
+    <header id="topbar">
+      <div class="page-title"><div class="crumb" id="topbar-crumb">Overview</div><h1 id="topbar-title">Dashboard</h1></div>
+      <div class="top-actions"><div class="clock" id="live-clock">--</div></div>
+    </header>
+    <main id="view-root"><div class="page-loading">Loading ICTRAX…</div></main>
+  </div>
+</div>
+<div id="modal-root"><div class="modal-backdrop" onclick="closeModal()"></div><div class="modal-panel" id="modal-panel"></div></div>
+<div id="toast-root"></div>
+<script src="script.js"></script>
+</body>
+</html>

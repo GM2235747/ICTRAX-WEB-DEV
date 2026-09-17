@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ICTRAX | Equipment Monitoring System — CEU Malolos</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/styles.css">
+</head>
+<body data-page="login">
+<div id="login-screen">
+  <div id="login-visual">
+    <div class="brandmark">
+      <div class="mark">ICT</div>
+      <div><div class="name">ICTRAX — Equipment Monitoring System</div><div class="sub">CEU MALOLOS · ICT RESOURCES</div></div>
+    </div>
+    <div class="headline">
+      <h1>Every unit tagged.<br>Every fault <span class="accent">tracked.</span></h1>
+      <p>A centralized platform for equipment inventory, incident reporting, and predictive maintenance across the CEU Malolos computer laboratories.</p>
+      <div class="tag-scatter" id="tag-scatter"></div>
+    </div>
+    <div class="foot-stats">
+      <div class="stat"><b id="lv-stat-equip">--</b><span>Tagged Units</span></div>
+      <div class="stat"><b id="lv-stat-labs">3</b><span>Laboratories</span></div>
+      <div class="stat"><b id="lv-stat-uptime">24/7</b><span>Monitoring</span></div>
+    </div>
+  </div>
+  <div id="login-form-side">
+    <div class="login-card">
+      <div class="mobile-brand"><div class="mark">ICT</div><div class="name">ICTRAX</div></div>
+      <h2>Sign in to ICTRAX</h2>
+      <p class="lead">Access your equipment monitoring workspace.</p>
+      <div class="role-switch" id="role-switch">
+        <button type="button" class="active" data-role="admin" onclick="setLoginRole('admin')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l8 4v6c0 5-3.4 8.4-8 10-4.6-1.6-8-5-8-10V6l8-4z"/></svg> Administrator</button>
+        <button type="button" data-role="student" onclick="setLoginRole('student')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/></svg> Student</button>
+      </div>
+      <div class="login-error" id="login-error">Incorrect username or password. Please check your credentials and try again.</div>
+      <form id="login-form" onsubmit="handleLogin(event)">
+        <div class="field"><label for="li-username">Username</label><input type="text" id="li-username" autocomplete="username" placeholder="e.g. admin.tech" required></div>
+        <div class="field"><label for="li-password">Password</label><input type="password" id="li-password" autocomplete="current-password" placeholder="••••••••" required></div>
+        <button type="submit" class="btn btn-primary btn-block login-submit">Sign in <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+      </form>
+    </div>
+  </div>
+</div>
+<div id="modal-root"><div class="modal-backdrop" onclick="closeModal()"></div><div class="modal-panel" id="modal-panel"></div></div>
+<div id="toast-root"></div>
+<script src="script.js"></script>
+</body>
+</html>
