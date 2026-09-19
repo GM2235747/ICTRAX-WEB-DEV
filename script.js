@@ -65,12 +65,13 @@ const PAGE_ACCESS = {
   risk:['admin'],
   reports:['admin'],
   browse:['student'],
-  report:['student'],
+  report:['admin','student'],
   myreports:['student']
 };
 const SESSION_KEY = 'ictrax_session_user_v1';
 const DB_STORAGE_KEY = 'ictrax_demo_db_v1';
 const PRESET_KEY = 'ictrax_preset_equipment_v1';
+const API_BASE_URL = 'api';
 
 
 /* ---------- category → icon / code maps ---------- */
@@ -144,7 +145,42 @@ const DB = {
 
 
 /* ---------- browser persistence for the frontend demo ---------- */
-function loadPersistedDb(){
+async function apiRequest(endpoint, options = {}) {
+  const response = await fetch(`${API_BASE_URL}/${endpoint}`, {
+    headers: {'Content-Type': 'application/json'},
+    ...options,
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.message || 'Request failed');
+  }
+
+  return payload;
+}
+
+async function loadPersistedDb(){
+  try {
+    const [equipmentRes, incidentsRes] = await Promise.all([
+      apiRequest('equipment.php').catch(() => ({success:false, data:[] })),
+      apiRequest('incidents.php').catch(() => ({success:false, data:[] })),
+    ]);
+
+    if (equipmentRes.success && Array.isArray(equipmentRes.data)) {
+      DB.equipment = equipmentRes.data;
+    }
+    if (incidentsRes.success && Array.isArray(incidentsRes.data)) {
+      DB.incidents = incidentsRes.data;
+    }
+
+    if (equipmentRes.success || incidentsRes.success) {
+      incidentSeq = DB.incidents.length;
+      return;
+    }
+  } catch (err) {
+    console.warn('ICTRAX: remote API not available, using local demo data.', err);
+  }
+
   try{
     const raw = localStorage.getItem(DB_STORAGE_KEY);
     if(!raw) return;
@@ -161,13 +197,29 @@ function saveDb(){
 }
 function getSessionUser(){
   try{
-    const userId = sessionStorage.getItem(SESSION_KEY);
-    return userId ? DB.users.find(user=>user.id===userId) || null : null;
+    const raw = sessionStorage.getItem(SESSION_KEY);
+    if(!raw) return null;
+
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.role) return parsed;
+    } catch (err) {}
+
+    const userId = String(raw);
+    return userId ? DB.users.find(user => String(user.id) === userId) || null : null;
   }catch(err){ return null; }
 }
 function setSessionUser(user){
   state.user = user;
-  try{ sessionStorage.setItem(SESSION_KEY, user.id); }catch(err){}
+  try{
+    const payload = {
+      ...user,
+      id: String(user.id),
+      username: user.username || '',
+      role: user.role || 'student'
+    };
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(payload));
+  }catch(err){}
 }
 function clearSession(){
   state.user = null;
@@ -193,32 +245,41 @@ function fmtDate(iso){
 }
 function daysBetween(a,b){ return Math.round((b-a)/86400000); }
 function todayISO(){ return new Date().toISOString().slice(0,10); }
-const NOW = new Date('2026-08-08T09:00:00');
+const NOW = new Date();
 
 /* ============================================================
    RISK ENGINE
-   Score 0–100, blended from four weighted factors described in
-   Chapter 3 (predictive, weighted-factor risk scoring):
-     • incident frequency  → up to 40 pts
-     • equipment age       → up to 25 pts
-     • maintenance staleness → up to 20 pts
-     • current status      → up to 15 pts
+   Score 0–100 from current state, history, age, maintenance, and
+   condition. Incident history decays over time so old resolved
+   problems remain visible without permanently dominating the score.
    ============================================================ */
 function getIncidentsFor(equipId){ return DB.incidents.filter(i=>i.equipmentId===equipId); }
 function calcRisk(equip){
   const related = getIncidentsFor(equip.id);
-  const openWeight = related.reduce((s,i)=> s + (i.status==='Resolved'||i.status==='Rejected' ? 4 : 10), 0);
-  const incidentScore = Math.min(openWeight,40);
+  const statusScore = {Operational:0,'Under Repair':18,Damaged:25,Missing:25,Decommissioned:0}[equip.status]||0;
+
+  const priorityWeight = {Low:1,Medium:3,High:6,Critical:8};
+  const categoryCounts = {};
+  related.forEach(i=>{ categoryCounts[i.category]=(categoryCounts[i.category]||0)+1; });
+  const incidentScore = Math.min(related.reduce((score,incident)=>{
+    const incidentDate = new Date(`${incident.dateReported}T00:00:00`);
+    const ageDays = Math.max(0, (NOW-incidentDate)/86400000);
+    const recencyWeight = ageDays<=180 ? 1 : ageDays<=365 ? .6 : ageDays<=730 ? .3 : .1;
+    const stateWeight = incident.status==='Pending'||incident.status==='In Progress' ? 1.25 : incident.status==='Rejected' ? .25 : .5;
+    const repeatWeight = categoryCounts[incident.category]>1 ? 2 : 0;
+    const unresolvedWeight = incident.status==='Pending'||incident.status==='In Progress' ? 3 : 0;
+    return score + ((priorityWeight[incident.priority]||3) * stateWeight + repeatWeight + unresolvedWeight) * recencyWeight;
+  },0),35);
 
   const ageYears = (NOW - new Date(equip.dateAcquired)) / (365.25*86400000);
-  const ageScore = Math.min(ageYears*5, 25);
+  const ageScore = Math.min(Math.max(ageYears,0)*1.5, 15);
 
   const daysSinceMaint = (NOW - new Date(equip.lastMaintenance)) / 86400000;
-  const maintScore = Math.min((daysSinceMaint/30)*3, 20);
+  const maintScore = daysSinceMaint<=90 ? 0 : daysSinceMaint<=180 ? 5 : daysSinceMaint<=365 ? 10 : 15;
 
-  const statusWeight = {Operational:0,'Under Repair':10,'Damaged':15,'Missing':15,'Decommissioned':0}[equip.status]||0;
+  const conditionScore = {New:0,Good:2,Fair:6,Poor:10}[equip.condition]||0;
 
-  const total = Math.round(Math.min(incidentScore+ageScore+maintScore+statusWeight,100));
+  const total = Math.round(Math.min(statusScore+incidentScore+ageScore+maintScore+conditionScore,100));
   return total;
 }
 function riskBand(score){
@@ -361,14 +422,39 @@ function fillDemo(role){
   $('#li-username').value = u.username;
   $('#li-password').value = u.password;
 }
-function handleLogin(e){
+async function handleLogin(e){
   e.preventDefault();
   const u = $('#li-username').value.trim();
   const p = $('#li-password').value;
-  const found = DB.users.find(x=>x.username.toLowerCase()===u.toLowerCase() && x.password===p && x.role===state.loginRole);
-  if(!found){ $('#login-error').style.display='flex'; return; }
-  setSessionUser(found);
-  window.location.href = PAGE_MAP.dashboard;
+
+  try {
+    const response = await apiRequest('login.php', {
+      method: 'POST',
+      body: JSON.stringify({ username: u, password: p })
+    });
+
+    if (!response.success || !response.user) {
+      $('#login-error').style.display='flex';
+      return;
+    }
+
+    const found = response.user;
+    if (found.role !== state.loginRole) {
+      $('#login-error').style.display='flex';
+      return;
+    }
+
+    setSessionUser(found);
+    window.location.href = PAGE_MAP.dashboard;
+  } catch (err) {
+    const fallbackUser = DB.users.find(x => x.username.toLowerCase() === u.toLowerCase() && x.password === p && x.role === state.loginRole);
+    if (!fallbackUser) {
+      $('#login-error').style.display='flex';
+      return;
+    }
+    setSessionUser(fallbackUser);
+    window.location.href = PAGE_MAP.dashboard;
+  }
 }
 function logout(){
   clearSession();
@@ -383,6 +469,7 @@ const NAV = {
     {id:'dashboard',label:'Dashboard',icon:'grid'},
     {id:'equipment',label:'Equipment Inventory',icon:'box'},
     {id:'incidents',label:'Incident Reports',icon:'flag',badge:()=>DB.incidents.filter(i=>i.status==='Pending').length},
+    {id:'report',label:'Report an Issue',icon:'flag'},
     {id:'risk',label:'Risk Analytics',icon:'activity'},
     {id:'reports',label:'Reports & Export',icon:'file'},
   ],
@@ -687,7 +774,7 @@ function openEquipmentForm(id){
       </div>
     </form>`);
 }
-function submitEquipmentForm(e,id){
+async function submitEquipmentForm(e,id){
   e.preventDefault();
   const data = {
     name:$('#f-name').value.trim(), category:$('#f-category').value, location:$('#f-location').value,
@@ -695,11 +782,34 @@ function submitEquipmentForm(e,id){
     dateAcquired:$('#f-acquired').value, lastMaintenance:$('#f-maint').value, notes:$('#f-notes').value.trim(),
   };
   if(id){
-    Object.assign(DB.equipment.find(x=>x.id===id),data);
+    try {
+      const response = await apiRequest('equipment.php', {
+        method:'PUT',
+        body:JSON.stringify({id,...data}),
+      });
+      if (!response.success || !response.data) throw new Error(response.message || 'Unable to update equipment');
+      Object.assign(DB.equipment.find(x=>x.id===id),response.data);
+    } catch (err) {
+      console.error('ICTRAX: remote equipment update failed.', err);
+      toast('Equipment was not updated in the database','bad');
+      return;
+    }
     toast(`${data.name} updated`,'good');
   } else {
     const newId = nextEquipmentId(data.location,data.category);
-    DB.equipment.push({id:newId,...data});
+    const equipment = {id:newId,...data};
+    try {
+      const response = await apiRequest('equipment.php', {
+        method:'POST',
+        body:JSON.stringify(equipment),
+      });
+      if (!response.success || !response.data) throw new Error(response.message || 'Unable to add equipment');
+      DB.equipment.push(response.data);
+    } catch (err) {
+      console.error('ICTRAX: remote equipment save failed.', err);
+      toast('Equipment was not saved to the database','bad');
+      return;
+    }
     toast(`${data.name} added as ${newId}`,'good');
   }
   saveDb();
@@ -716,8 +826,17 @@ function confirmDeleteEquipment(id){
       <button class="btn btn-danger" onclick="deleteEquipment('${id}')">${icon('trash')} Remove</button>
     </div>`);
 }
-function deleteEquipment(id){
-  DB.equipment = DB.equipment.filter(x=>x.id!==id);
+async function deleteEquipment(id){
+  try {
+    const response = await apiRequest(`equipment.php?id=${encodeURIComponent(id)}`, {method:'DELETE'});
+    if (!response.success) throw new Error(response.message || 'Unable to delete equipment');
+    DB.equipment = DB.equipment.filter(x=>x.id!==id);
+    DB.incidents = DB.incidents.filter(x=>x.equipmentId!==id);
+  } catch (err) {
+    console.error('ICTRAX: remote equipment delete failed.', err);
+    toast('Equipment was not deleted from the database','bad');
+    return;
+  }
   saveDb();
   closeModal(); toast('Equipment removed','bad'); navigate('equipment');
 }
@@ -833,18 +952,49 @@ function openIncidentModal(id){
     </div>
     <div class="modal-foot">
       <button class="btn btn-outline" onclick="closeModal()">Close</button>
-      ${isAdmin?`<button class="btn btn-primary" onclick="saveIncidentUpdate('${i.id}')">${icon('check')} Save Update</button>`:''}
+      ${isAdmin?`<button class="btn btn-danger" onclick="deleteIncident('${i.id}')">${icon('trash')} Delete</button><button class="btn btn-primary" onclick="saveIncidentUpdate('${i.id}')">${icon('check')} Save Update</button>`:''}
     </div>`);
 }
-function saveIncidentUpdate(id){
+async function saveIncidentUpdate(id){
   const i = DB.incidents.find(x=>x.id===id);
-  i.status = $('#ui-status').value;
-  i.priority = $('#ui-priority').value;
-  i.remarks = $('#ui-remarks').value.trim();
-  i.resolvedDate = (i.status==='Resolved'||i.status==='Rejected') ? (i.resolvedDate||todayISO()) : null;
+  const update = {
+    id,
+    status:$('#ui-status').value,
+    priority:$('#ui-priority').value,
+    remarks:$('#ui-remarks').value.trim(),
+    resolvedDate:(($('#ui-status').value==='Resolved'||$('#ui-status').value==='Rejected') ? (i.resolvedDate||todayISO()) : null),
+  };
+  try {
+    const response = await apiRequest('incidents.php', {
+      method:'PUT',
+      body:JSON.stringify(update),
+    });
+    if (!response.success || !response.data) throw new Error(response.message || 'Unable to update incident');
+    Object.assign(i,response.data);
+  } catch (err) {
+    console.error('ICTRAX: remote incident update failed.', err);
+    toast('Incident was not updated in the database','bad');
+    return;
+  }
   saveDb();
   closeModal();
   toast(`${id} updated to ${i.status}`,'good');
+  navigate(state.view);
+}
+async function deleteIncident(id){
+  if(!window.confirm(`Delete ${id}? This cannot be undone.`)) return;
+  try {
+    const response = await apiRequest(`incidents.php?id=${encodeURIComponent(id)}`, {method:'DELETE'});
+    if (!response.success) throw new Error(response.message || 'Unable to delete incident');
+    DB.incidents = DB.incidents.filter(x=>x.id!==id);
+  } catch (err) {
+    console.error('ICTRAX: remote incident delete failed.', err);
+    toast('Incident was not deleted from the database','bad');
+    return;
+  }
+  saveDb();
+  closeModal();
+  toast(`${id} deleted`,'bad');
   navigate(state.view);
 }
 
@@ -860,7 +1010,7 @@ function renderRiskView(){
     {label:'High',value:bands.High,hex:'#df9f34'},{label:'Critical',value:bands.Critical,hex:'#c1443c'},
   ];
   return `<div class="view">
-    <div class="banner banner-amber">${icon('activity')}<div><strong>How this is calculated.</strong> Each unit's score blends incident frequency (≤40 pts), equipment age (≤25 pts), days since last maintenance (≤20 pts), and current status (≤15 pts) into a 0–100 index — the weighted, predictive model described in Chapter 3.</div></div>
+    <div class="banner banner-amber">${icon('activity')}<div><strong>How this is calculated.</strong> Each unit's score blends current status (≤25 pts), incident history with recency and priority (≤35 pts), equipment age (≤15 pts), maintenance staleness (≤15 pts), and condition (≤10 pts) into a 0–100 index.</div></div>
 
     <div class="grid-2">
       <div class="card"><div class="card-head"><div><h3>Risk Distribution</h3><div class="sub">${risks.length} active units evaluated</div></div></div>
@@ -987,7 +1137,7 @@ function printReport(kind){
    ============================================================ */
 function renderStudentDashboard(){
   const u = state.user;
-  const myReports = DB.incidents.filter(i=>i.reportedByUserId===u.id);
+  const myReports = DB.incidents.filter(i=>String(i.reportedByUserId)===String(u.id));
   const openCount = myReports.filter(i=>i.status==='Pending'||i.status==='In Progress').length;
   const resolved = myReports.filter(i=>i.status==='Resolved').length;
   const available = DB.equipment.filter(e=>e.status==='Operational').length;
@@ -1124,7 +1274,7 @@ function renderReportView(){
           <div class="field"><label>Description</label><textarea id="rf-desc" rows="4" required placeholder="What happened? Be as specific as you can — error messages, sounds, timing…"></textarea></div>
           <div class="field-row">
             <div class="field"><label>Your Name</label><input type="text" id="rf-name" value="${esc(u.name)}" required></div>
-            <div class="field"><label>Section / Course</label><input type="text" id="rf-course" value="${esc(u.course||'')}" required></div>
+            <div class="field"><label>${u.role==='admin'?'Department / Unit':'Section / Course'}</label><input type="text" id="rf-course" value="${esc(u.course||'')}" ${u.role==='admin'?'':'required'}></div>
           </div>
         </div>
         <div class="modal-foot" style="border-top:1px solid var(--line)">
@@ -1135,7 +1285,7 @@ function renderReportView(){
     </div>
   </div>`;
 }
-function submitIncidentForm(e){
+async function submitIncidentForm(e){
   e.preventDefault();
   const equipmentId = $('#rf-equip').value;
   if(!equipmentId){ toast('Please select the equipment first','bad'); return; }
@@ -1145,7 +1295,19 @@ function submitIncidentForm(e){
     dateReported: $('#rf-date').value||todayISO(), category: $('#rf-category').value,
     description: $('#rf-desc').value.trim(), status:'Pending', priority:'Medium', remarks:'', resolvedDate:null,
   };
-  DB.incidents.push(rec);
+  try {
+    const response = await apiRequest('incidents.php', {
+      method:'POST',
+      body:JSON.stringify(rec),
+    });
+    if (!response.success || !response.data) throw new Error(response.message || 'Unable to submit report');
+    DB.incidents.push(response.data);
+    rec.id = response.data.id;
+  } catch (err) {
+    console.error('ICTRAX: incident report was not saved.', err);
+    toast('Report was not saved to the database','bad');
+    return;
+  }
   saveDb();
   state.presetEquipId = null;
   try{ sessionStorage.removeItem(PRESET_KEY); }catch(err){}
@@ -1157,7 +1319,7 @@ function submitIncidentForm(e){
    STUDENT — My Reports
    ============================================================ */
 function renderMyReportsView(){
-  const mine = DB.incidents.filter(i=>i.reportedByUserId===state.user.id).sort((a,b)=>new Date(b.dateReported)-new Date(a.dateReported));
+  const mine = DB.incidents.filter(i=>String(i.reportedByUserId)===String(state.user.id)).sort((a,b)=>new Date(b.dateReported)-new Date(a.dateReported));
   return `<div class="view">
     <div class="card"><div class="card-body flush">
     ${mine.length===0?emptyState('inbox','No reports submitted yet','Reports you file will show up here with live status updates.'):
@@ -1214,8 +1376,8 @@ function initLoginVisual(){
   const equipCount = $('#lv-stat-equip');
   if(equipCount) equipCount.textContent = DB.equipment.length;
 }
-window.addEventListener('DOMContentLoaded',()=>{
-  loadPersistedDb();
+window.addEventListener('DOMContentLoaded', async ()=>{
+  await loadPersistedDb();
 
   if(currentPage()==='login'){
     const sessionUser = getSessionUser();
