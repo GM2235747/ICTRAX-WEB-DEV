@@ -13,7 +13,7 @@ if ($username === '' || $password === '') {
     exit;
 }
 
-$stmt = $pdo->prepare('SELECT * FROM users WHERE username = :username LIMIT 1');
+$stmt = $pdo->prepare('SELECT * FROM users WHERE username = :username AND active = 1 AND deleted_at IS NULL LIMIT 1');
 $stmt->execute([':username' => $username]);
 $user = $stmt->fetch();
 

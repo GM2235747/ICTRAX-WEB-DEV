@@ -11,7 +11,12 @@ CREATE TABLE IF NOT EXISTS users (
     initials VARCHAR(10) NULL,
     student_id VARCHAR(50) NULL,
     course VARCHAR(100) NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP NULL DEFAULT NULL,
+    deleted_by_user_id INT NULL,
+    UNIQUE KEY uq_student_id (student_id)
 );
 
 CREATE TABLE IF NOT EXISTS equipment (
@@ -25,7 +30,16 @@ CREATE TABLE IF NOT EXISTS equipment (
     condition_status VARCHAR(50) NOT NULL,
     date_acquired DATE NOT NULL,
     last_maintenance DATE NOT NULL,
-    notes TEXT
+    notes TEXT,
+    created_by_user_id INT NULL,
+    updated_by_user_id INT NULL,
+    deleted_at TIMESTAMP NULL DEFAULT NULL,
+    deleted_by_user_id INT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_equipment_serial_location (serial_number, location),
+    INDEX idx_equipment_status (status),
+    INDEX idx_equipment_location (location)
 );
 
 CREATE TABLE IF NOT EXISTS incidents (
@@ -41,9 +55,58 @@ CREATE TABLE IF NOT EXISTS incidents (
     priority VARCHAR(50) NOT NULL,
     remarks TEXT NULL,
     resolved_date DATE NULL,
+    created_by_user_id INT NULL,
+    updated_by_user_id INT NULL,
+    deleted_at TIMESTAMP NULL DEFAULT NULL,
+    deleted_by_user_id INT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (equipment_id) REFERENCES equipment(id),
-    FOREIGN KEY (reported_by_user_id) REFERENCES users(id)
+    FOREIGN KEY (reported_by_user_id) REFERENCES users(id),
+    INDEX idx_incidents_status (status),
+    INDEX idx_incidents_priority (priority),
+    INDEX idx_incidents_date_reported (date_reported)
 );
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NULL,
+    action VARCHAR(30) NOT NULL,
+    entity_type VARCHAR(30) NOT NULL,
+    entity_id VARCHAR(100) NOT NULL,
+    details JSON NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_audit_created_at (created_at),
+    INDEX idx_audit_entity (entity_type, entity_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS equipment_categories (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL UNIQUE,
+    is_builtin TINYINT(1) NOT NULL DEFAULT 0,
+    deleted_at TIMESTAMP NULL DEFAULT NULL,
+    created_by_user_id INT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS equipment_locations (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(150) NOT NULL UNIQUE,
+    is_builtin TINYINT(1) NOT NULL DEFAULT 0,
+    deleted_at TIMESTAMP NULL DEFAULT NULL,
+    created_by_user_id INT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT IGNORE INTO equipment_categories (name, is_builtin) VALUES
+('Desktop Computer', 1), ('Monitor', 1), ('Keyboard', 1), ('Mouse', 1),
+('UPS', 1), ('Projector', 1), ('Printer', 1), ('Router/Switch', 1),
+('Webcam', 1), ('Headset', 1);
+
+INSERT IGNORE INTO equipment_locations (name, is_builtin) VALUES
+('Computer Laboratory 1', 1), ('Computer Laboratory 2', 1),
+('Computer Laboratory 3', 1), ('Server Room', 1);
 
 INSERT INTO users (username, password_hash, role, full_name, title, initials, student_id, course)
 VALUES

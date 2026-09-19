@@ -52,6 +52,7 @@ const PAGE_MAP = {
   dashboard:'dashboard.html',
   equipment:'inventory.html',
   incidents:'incidents.html',
+  audit:'audit.html',
   risk:'risk.html',
   reports:'reports.html',
   browse:'browse-equipment.html',
@@ -62,6 +63,7 @@ const PAGE_ACCESS = {
   dashboard:['admin','student'],
   equipment:['admin'],
   incidents:['admin'],
+  audit:['admin'],
   risk:['admin'],
   reports:['admin'],
   browse:['student'],
@@ -79,6 +81,12 @@ const CATEGORY_ICON = {'Desktop Computer':'cpu','Monitor':'monitor','Keyboard':'
 const CATEGORY_CODE = {'Desktop Computer':'DT','Monitor':'MN','Keyboard':'KB','Mouse':'MO','UPS':'UPS','Projector':'PRJ','Printer':'PRT','Router/Switch':'NET','Webcam':'CAM','Headset':'HS'};
 const LOCATIONS = ['Computer Laboratory 1','Computer Laboratory 2','Computer Laboratory 3','Server Room'];
 const LOCATION_CODE = {'Computer Laboratory 1':'CL1','Computer Laboratory 2':'CL2','Computer Laboratory 3':'CL3','Server Room':'SVR'};
+const catalogState = {
+  categories:[...Object.keys(CATEGORY_ICON)],
+  locations:[...LOCATIONS],
+  categoryRecords:[],
+  locationRecords:[],
+};
 
 /* ============================================================
    MOCK DATA LAYER
@@ -161,9 +169,10 @@ async function apiRequest(endpoint, options = {}) {
 
 async function loadPersistedDb(){
   try {
-    const [equipmentRes, incidentsRes] = await Promise.all([
+    const [equipmentRes, incidentsRes, catalogRes] = await Promise.all([
       apiRequest('equipment.php').catch(() => ({success:false, data:[] })),
       apiRequest('incidents.php').catch(() => ({success:false, data:[] })),
+      apiRequest('catalog.php').catch(() => ({success:false})),
     ]);
 
     if (equipmentRes.success && Array.isArray(equipmentRes.data)) {
@@ -171,6 +180,16 @@ async function loadPersistedDb(){
     }
     if (incidentsRes.success && Array.isArray(incidentsRes.data)) {
       DB.incidents = incidentsRes.data;
+    }
+    if (catalogRes.success) {
+      if (Array.isArray(catalogRes.categories)) {
+        catalogState.categoryRecords = catalogRes.categories;
+        catalogState.categories = catalogRes.categories.map(x=>x.name);
+      }
+      if (Array.isArray(catalogRes.locations)) {
+        catalogState.locationRecords = catalogRes.locations;
+        catalogState.locations = catalogRes.locations.map(x=>x.name);
+      }
     }
 
     if (equipmentRes.success || incidentsRes.success) {
@@ -244,6 +263,16 @@ function fmtDate(iso){
   return d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
 }
 function daysBetween(a,b){ return Math.round((b-a)/86400000); }
+function daysSinceMaintenance(equip){
+  const today = new Date();
+  const todayDate = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const maintenanceDate = new Date(`${equip.lastMaintenance}T00:00:00`);
+  return Math.max(0, daysBetween(maintenanceDate, todayDate));
+}
+function maintenanceAgeLabel(equip){
+  const days = daysSinceMaintenance(equip);
+  return days===0 ? 'Today' : `${days} day${days===1?'':'s'}`;
+}
 function todayISO(){ return new Date().toISOString().slice(0,10); }
 const NOW = new Date();
 
@@ -254,7 +283,7 @@ const NOW = new Date();
    problems remain visible without permanently dominating the score.
    ============================================================ */
 function getIncidentsFor(equipId){ return DB.incidents.filter(i=>i.equipmentId===equipId); }
-function calcRisk(equip){
+function riskBreakdown(equip){
   const related = getIncidentsFor(equip.id);
   const statusScore = {Operational:0,'Under Repair':18,Damaged:25,Missing:25,Decommissioned:0}[equip.status]||0;
 
@@ -270,17 +299,33 @@ function calcRisk(equip){
     const unresolvedWeight = incident.status==='Pending'||incident.status==='In Progress' ? 3 : 0;
     return score + ((priorityWeight[incident.priority]||3) * stateWeight + repeatWeight + unresolvedWeight) * recencyWeight;
   },0),35);
+  const recentIncidentCount = related.filter(i=>(NOW-new Date(`${i.dateReported}T00:00:00`))/86400000<=90).length;
+  const trendScore = Math.min(recentIncidentCount*5,15);
 
   const ageYears = (NOW - new Date(equip.dateAcquired)) / (365.25*86400000);
   const ageScore = Math.min(Math.max(ageYears,0)*1.5, 15);
 
   const daysSinceMaint = (NOW - new Date(equip.lastMaintenance)) / 86400000;
-  const maintScore = daysSinceMaint<=90 ? 0 : daysSinceMaint<=180 ? 5 : daysSinceMaint<=365 ? 10 : 15;
+  const maintScore = Math.min(Math.max((daysSinceMaint-90)/18.333,0),15);
 
   const conditionScore = {New:0,Good:2,Fair:6,Poor:10}[equip.condition]||0;
-
-  const total = Math.round(Math.min(statusScore+incidentScore+ageScore+maintScore+conditionScore,100));
-  return total;
+  const rawTotal = Math.round(Math.min(statusScore+incidentScore+trendScore+ageScore+maintScore+conditionScore,100));
+  const severeAgeAndMaintenance = ageYears>=10 && daysSinceMaint>365*5 && equip.condition==='Poor';
+  const riskMinimum = severeAgeAndMaintenance ? 75 : (equip.condition==='Poor' && daysSinceMaint>365 ? 50 : 0);
+  const riskFloor = Math.max(0,riskMinimum-rawTotal);
+  return {
+    status:Math.round(statusScore),
+    incidents:Math.round(incidentScore),
+    trend:Math.round(trendScore),
+    age:Math.round(ageScore),
+    maintenance:Math.round(maintScore),
+    condition:Math.round(conditionScore),
+    riskFloor,
+    total:Math.round(Math.min(rawTotal+riskFloor,100)),
+  };
+}
+function calcRisk(equip){
+  return riskBreakdown(equip).total;
 }
 function riskBand(score){
   if(score>=75) return {label:'Critical',color:'red',hex:'#c1443c'};
@@ -292,6 +337,17 @@ function riskBar(score){
   const band = riskBand(score);
   return `<div style="min-width:96px"><div class="risk-track"><div class="risk-fill" style="width:${score}%;background:${band.hex}"></div></div>
     <div style="font-family:var(--font-mono);font-size:10.5px;color:var(--text-500);margin-top:4px">${score}/100 · ${band.label}</div></div>`;
+}
+function riskReasons(equip,breakdown){
+  const reasons=[];
+  if(equip.status!=='Operational') reasons.push(`Status is ${equip.status}.`);
+  if(equip.condition==='Poor') reasons.push('Poor equipment condition.');
+  if(breakdown.age>=15) reasons.push('Equipment has reached the maximum age-risk contribution.');
+  if(breakdown.maintenance>=15) reasons.push('Maintenance is substantially overdue.');
+  if(breakdown.trend) reasons.push(`${Math.round(breakdown.trend/5)} incident(s) were reported in the last 90 days.`);
+  if((equip.criticality||'Standard')!=='Standard') reasons.push(`${equip.criticality} operational criticality.`);
+  if(breakdown.riskFloor) reasons.push('A minimum risk floor was applied for severe age, condition, and maintenance risk.');
+  return reasons.length?reasons:['No major risk triggers detected.'];
 }
 
 /* ---------- status → badge helper ---------- */
@@ -311,7 +367,8 @@ function tagChip(id){ return `<span class="tag-chip">${esc(id)}</span>`; }
    ============================================================ */
 function donutSVG(segments,opts={}){
   const size=opts.size||164, stroke=opts.stroke||20, r=(size-stroke)/2, c=2*Math.PI*r, cx=size/2, cy=size/2;
-  const total = segments.reduce((s,d)=>s+d.value,0) || 1;
+  const displayTotal = segments.reduce((s,d)=>s+d.value,0);
+  const total = displayTotal || 1;
   let offset=0, circles='';
   segments.filter(s=>s.value>0).forEach(seg=>{
     const frac = seg.value/total, len = frac*c;
@@ -321,7 +378,7 @@ function donutSVG(segments,opts={}){
   return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
     <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#ebe9e2" stroke-width="${stroke}"/>
     ${circles}
-    <text x="${cx}" y="${cy-3}" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="24" font-weight="700" fill="#181a1f">${total}</text>
+    <text x="${cx}" y="${cy-3}" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="24" font-weight="700" fill="#181a1f">${displayTotal}</text>
     <text x="${cx}" y="${cy+16}" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" letter-spacing="1.5" fill="#93959c">UNITS</text>
   </svg>`;
 }
@@ -456,6 +513,35 @@ async function handleLogin(e){
     window.location.href = PAGE_MAP.dashboard;
   }
 }
+function openRegistrationForm(){
+  openModal(`<div class="modal-head"><div><h3>Create Student Account</h3><div class="modal-sub">Register once to report equipment issues.</div></div><button class="modal-close" onclick="closeModal()">${icon('x')}</button></div>
+    <form onsubmit="submitRegistration(event)"><div class="modal-body">
+      <div class="field"><label>Full Name</label><input id="reg-name" required maxlength="150" autocomplete="name"></div>
+      <div class="field-row"><div class="field"><label>Student ID</label><input id="reg-student-id" required maxlength="50" autocomplete="off"></div><div class="field"><label>Course / Section</label><input id="reg-course" required maxlength="100"></div></div>
+      <div class="field"><label>Username</label><input id="reg-username" required minlength="3" maxlength="100" pattern="[A-Za-z0-9._-]+" autocomplete="username"><div class="hint">Use letters, numbers, dots, underscores, or hyphens.</div></div>
+      <div class="field-row"><div class="field"><label>Password</label><input type="password" id="reg-password" required minlength="8" autocomplete="new-password"></div><div class="field"><label>Confirm Password</label><input type="password" id="reg-confirm" required minlength="8" autocomplete="new-password"></div></div>
+      <div class="login-error" id="registration-error"></div>
+    </div><div class="modal-foot"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Create Account</button></div></form>`);
+}
+async function submitRegistration(event){
+  event.preventDefault();
+  const password = $('#reg-password').value;
+  const confirm = $('#reg-confirm').value;
+  const error = $('#registration-error');
+  if(password !== confirm){ error.textContent='Passwords do not match.'; error.style.display='flex'; return; }
+  try {
+    const response = await apiRequest('register.php',{method:'POST',body:JSON.stringify({
+      fullName:$('#reg-name').value.trim(), studentId:$('#reg-student-id').value.trim(), course:$('#reg-course').value.trim(), username:$('#reg-username').value.trim(), password, confirmPassword:confirm,
+    })});
+    if(!response.success) throw new Error(response.message || 'Unable to create account.');
+    const username = $('#reg-username').value.trim();
+    closeModal();
+    setLoginRole('student');
+    $('#li-username').value = username;
+    $('#li-password').value = '';
+    toast('Student account created. Sign in to continue.','good');
+  } catch(err) { error.textContent=err.message; error.style.display='flex'; }
+}
 function logout(){
   clearSession();
   state.view=null;
@@ -469,6 +555,7 @@ const NAV = {
     {id:'dashboard',label:'Dashboard',icon:'grid'},
     {id:'equipment',label:'Equipment Inventory',icon:'box'},
     {id:'incidents',label:'Incident Reports',icon:'flag',badge:()=>DB.incidents.filter(i=>i.status==='Pending').length},
+    {id:'audit',label:'Audit Log',icon:'list'},
     {id:'report',label:'Report an Issue',icon:'flag'},
     {id:'risk',label:'Risk Analytics',icon:'activity'},
     {id:'reports',label:'Reports & Export',icon:'file'},
@@ -484,6 +571,7 @@ const TITLES = {
   dashboard:['Overview','Dashboard'],
   equipment:['ICT Resources','Equipment Inventory'],
   incidents:['Service Desk','Incident Reports'],
+  audit:['Administration','Audit Log'],
   risk:['Predictive Maintenance','Risk Analytics'],
   reports:['Documentation','Reports & Export'],
   browse:['ICT Resources','Browse Equipment'],
@@ -518,6 +606,54 @@ function renderSidebar(){
       </div>
       <button class="btn btn-outline btn-sm btn-block" onclick="logout()">${icon('logout')} <span class="label-text">Sign out</span></button>
     </div>`;
+}
+
+function auditActionStyle(action){
+  return {
+    create:{label:'Added',bg:'var(--teal-tint)',fg:'var(--teal-dark)',icon:'plus'},
+    update:{label:'Changed',bg:'var(--amber-tint)',fg:'var(--amber-dark)',icon:'edit'},
+    delete:{label:'Removed',bg:'var(--red-tint)',fg:'var(--red-dark)',icon:'trash'},
+  }[action] || {label:action,bg:'var(--surface-sunk)',fg:'var(--text-700)',icon:'activity'};
+}
+function renderAuditDetails(row){
+  const details = row.details || {};
+  const action = auditActionStyle(row.action);
+  const previous = details.previous || null;
+  const current = details.current || null;
+  if(previous && current){
+    const keys = [...new Set([...Object.keys(previous),...Object.keys(current)])].filter(key=>!['id','equipment_code','equipment_id'].includes(key));
+    return `<div style="display:grid;gap:6px">${keys.map(key=>{
+      const before = String(previous[key] ?? '');
+      const after = String(current[key] ?? '');
+      const changed = before !== after;
+      return `<div style="padding:7px 9px;border-radius:6px;background:${changed?'var(--amber-tint)':'var(--surface-sunk)'};color:${changed?'var(--amber-dark)':'var(--text-500)'}"><strong>${esc(key)}</strong>${changed?`<div style="margin-top:3px;color:var(--red-dark)">Before: ${esc(before||'—')}</div><div style="color:var(--teal-dark)">After: ${esc(after||'—')}</div>`:' <span>unchanged</span>'}</div>`;
+    }).join('')}</div>`;
+  }
+  const values = current || previous || details;
+  return `<div style="padding:8px 10px;border-radius:6px;background:${action.bg};color:${action.fg}"><pre style="white-space:pre-wrap;margin:0;font:12px var(--font-mono)">${esc(JSON.stringify(values,null,2))}</pre></div>`;
+}
+function renderAuditView(){
+  setTimeout(loadAuditView,0);
+  return `<div class="view">
+    <div class="toolbar"><div><div class="sub">Administrative history of changes made to equipment and incident records.</div></div><button class="btn btn-outline" onclick="loadAuditView()">${icon('activity')} Refresh</button></div>
+    <div class="card"><div class="card-body flush"><div id="audit-content"><div class="page-loading">Loading audit history...</div></div></div></div>
+  </div>`;
+}
+async function loadAuditView(){
+  const root = $('#audit-content');
+  if(!root) return;
+  root.innerHTML = '<div class="page-loading">Loading audit history...</div>';
+  try {
+    const response = await apiRequest('audit.php?limit=250');
+    if(!response.success) throw new Error(response.message || 'Unable to load audit history');
+    const rows = response.data || [];
+    root.innerHTML = rows.length ? `<div class="table-wrap"><table class="dtable"><thead><tr><th>Date</th><th>Actor</th><th>Action</th><th>Record</th><th>Details</th></tr></thead><tbody>${rows.map(row=>{
+      const action = auditActionStyle(row.action);
+      return `<tr><td>${esc(row.created_at)}</td><td>${esc(row.username || 'System')}</td><td><span style="display:inline-flex;align-items:center;gap:5px;padding:5px 8px;border-radius:6px;background:${action.bg};color:${action.fg};font-size:12px;font-weight:600">${icon(action.icon)} ${action.label}</span></td><td>${esc(row.entity_type)} · ${esc(row.entity_id)}</td><td><details><summary>View changes</summary><div style="max-width:520px;margin-top:10px">${renderAuditDetails(row)}</div></details></td></tr>`;
+    }).join('')}</tbody></table></div>` : emptyState('inbox','No audit history','Changes will appear here after an administrator creates, edits, or deletes a record.');
+  } catch(err) {
+    root.innerHTML = emptyState('alert','Audit history unavailable',esc(err.message));
+  }
 }
 function navigate(viewId,opts={}){
   const target = PAGE_MAP[viewId];
@@ -584,7 +720,7 @@ function renderAdminDashboard(){
   const total = eq.length;
   const byStatus = {};
   eq.forEach(e=>{ byStatus[e.status]=(byStatus[e.status]||0)+1; });
-  const operational = byStatus['Operational']||0;
+  const operational = eq.filter(e=>e.status==='Operational').length;
   const pending = DB.incidents.filter(i=>i.status==='Pending').length;
   const inProgress = DB.incidents.filter(i=>i.status==='In Progress').length;
   const risks = eq.map(e=>({e,score:calcRisk(e)})).sort((a,b)=>b.score-a.score);
@@ -611,7 +747,7 @@ function renderAdminDashboard(){
       ${statCard('box','Total Equipment',total,`${operational} operational`,'teal')}
       ${statCard('flag','Pending Incidents',pending,`${inProgress} in progress`,pending>0?'amber':'teal')}
       ${statCard('activity','Elevated Risk Units',elevated,'High or Critical band','red')}
-      ${statCard('check','Fleet Availability',(total?Math.round(operational/total*100):0)+'%','currently operational','teal')}
+      ${statCard('check','Fleet Availability',(total?Math.round(operational/total*100):0)+'%','Currently Operational','teal')}
     </div>
 
     <div class="grid-2">
@@ -685,7 +821,7 @@ function renderEquipmentView(){
     }
     return true;
   });
-  const categories=[...new Set(DB.equipment.map(e=>e.category))];
+  const categories=[...new Set([...catalogState.categories,...DB.equipment.map(e=>e.category)])];
   const statuses=['Operational','Under Repair','Damaged','Missing','Decommissioned'];
 
   return `<div class="view">
@@ -701,12 +837,12 @@ function renderEquipmentView(){
           ${statuses.map(s=>`<option value="${s}" ${f.equipStatus===s?'selected':''}>${s}</option>`).join('')}
         </select>
       </div>
-      <button class="btn btn-primary" onclick="openEquipmentForm()">${icon('plus')} Add Equipment</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-outline" onclick="openCatalogManager()">${icon('list')} Manage Options</button><button class="btn btn-primary" onclick="openEquipmentForm()">${icon('plus')} Add Equipment</button></div>
     </div>
 
     <div class="card"><div class="card-body flush">
       <div class="table-wrap"><table class="dtable">
-        <thead><tr><th>Tag ID</th><th>Equipment</th><th>Location</th><th>Status</th><th>Risk</th><th>Last Maintenance</th><th></th></tr></thead>
+        <thead><tr><th>Tag ID</th><th>Equipment</th><th>Location</th><th>Status</th><th>Risk</th><th>Date Acquired</th><th>Last Maintenance</th><th></th></tr></thead>
         <tbody>
         ${rows.map(e=>{
           const score = calcRisk(e);
@@ -716,7 +852,8 @@ function renderEquipmentView(){
             <td>${esc(e.location)}</td>
             <td>${badge(e.status)}</td>
             <td>${riskBar(score)}</td>
-            <td>${fmtDate(e.lastMaintenance)}</td>
+            <td>${fmtDate(e.dateAcquired)}</td>
+            <td><div>${fmtDate(e.lastMaintenance)}</div><div class="cell-sub">${maintenanceAgeLabel(e)} since last maintenance</div></td>
             <td><div class="row-actions">
               <button class="icon-btn" title="View QR tag" onclick="openQrModal('${e.id}')">${icon('qrcode')}</button>
               <button class="icon-btn" title="Edit" onclick="openEquipmentForm('${e.id}')">${icon('edit')}</button>
@@ -733,10 +870,47 @@ function renderEquipmentView(){
 function onEquipSearch(v){ state.filters.equipSearch=v; $('#view-root').innerHTML=renderEquipmentView(); const inp=$('.search-box input'); if(inp){inp.focus();inp.setSelectionRange(v.length,v.length);} }
 function onEquipFilter(key,val){ state.filters[key]=val; $('#view-root').innerHTML=renderEquipmentView(); }
 
+function openCatalogManager(){
+  openModal(`<div class="modal-head"><div><h3>Manage Equipment Options</h3><div class="modal-sub">Built-in options are protected. Options used by equipment cannot be removed.</div></div><button class="modal-close" onclick="closeModal()">${icon('x')}</button></div>
+    <div class="modal-body"><div class="field"><label>New Category</label><div style="display:flex;gap:8px"><input id="new-category" placeholder="e.g. Scanner"><button class="btn btn-outline" type="button" onclick="addCatalogOption('category')">${icon('plus')} Add</button></div></div>
+    <div class="field"><label>Categories</label><div class="kv-list">${catalogState.categoryRecords.map(x=>`<div class="kv-row"><span class="v">${esc(x.name)}</span>${Number(x.isBuiltin)?'<span class="cell-sub">Built-in</span>':`<button class="icon-btn" title="Remove" onclick="removeCatalogOption('category',${x.id})">${icon('trash')}</button>`}</div>`).join('')}</div></div>
+    <div class="field"><label>New Location</label><div style="display:flex;gap:8px"><input id="new-location" placeholder="e.g. Media Lab"><button class="btn btn-outline" type="button" onclick="addCatalogOption('location')">${icon('plus')} Add</button></div></div>
+    <div class="field"><label>Locations</label><div class="kv-list">${catalogState.locationRecords.map(x=>`<div class="kv-row"><span class="v">${esc(x.name)}</span>${Number(x.isBuiltin)?'<span class="cell-sub">Built-in</span>':`<button class="icon-btn" title="Remove" onclick="removeCatalogOption('location',${x.id})">${icon('trash')}</button>`}</div>`).join('')}</div></div></div>
+    <div class="modal-foot"><button class="btn btn-outline" onclick="closeModal()">Close</button></div>`);
+}
+async function refreshCatalogs(){
+  const response = await apiRequest('catalog.php');
+  catalogState.categoryRecords = response.categories || [];
+  catalogState.locationRecords = response.locations || [];
+  catalogState.categories = catalogState.categoryRecords.map(x=>x.name);
+  catalogState.locations = catalogState.locationRecords.map(x=>x.name);
+}
+async function addCatalogOption(type){
+  const input = type==='category' ? $('#new-category') : $('#new-location');
+  const name = input?.value.trim();
+  if(!name){ toast('Enter a name first','bad'); return; }
+  try {
+    const response = await apiRequest('catalog.php',{method:'POST',body:JSON.stringify({type,name})});
+    if(!response.success) throw new Error(response.message || 'Unable to add option');
+    await refreshCatalogs();
+    openCatalogManager();
+    toast(`${name} added`,'good');
+  } catch(err) { toast(err.message,'bad'); }
+}
+async function removeCatalogOption(type,id){
+  try {
+    const response = await apiRequest(`catalog.php?type=${type}&id=${id}`,{method:'DELETE'});
+    if(!response.success) throw new Error(response.message || 'Unable to remove option');
+    await refreshCatalogs();
+    openCatalogManager();
+    toast('Option removed','good');
+  } catch(err) { toast(err.message,'bad'); }
+}
+
 function openEquipmentForm(id){
   const editing = !!id;
   const e = editing ? DB.equipment.find(x=>x.id===id) : null;
-  const categories = Object.keys(CATEGORY_ICON);
+  const categories = [...new Set(catalogState.categories)];
   openModal(`
     <div class="modal-head">
       <div><h3>${editing?'Edit Equipment':'Add Equipment'}</h3><div class="modal-sub">${editing?e.id:'A new tag ID is generated automatically'}</div></div>
@@ -750,7 +924,7 @@ function openEquipmentForm(id){
             ${categories.map(c=>`<option value="${c}" ${editing&&e.category===c?'selected':''}>${c}</option>`).join('')}
           </select></div>
           <div class="field"><label>Location</label><select id="f-location" required>
-            ${LOCATIONS.map(l=>`<option value="${l}" ${editing&&e.location===l?'selected':''}>${l}</option>`).join('')}
+            ${catalogState.locations.map(l=>`<option value="${l}" ${editing&&e.location===l?'selected':''}>${l}</option>`).join('')}
           </select></div>
         </div>
         <div class="field"><label>Serial Number</label><input type="text" id="f-serial" required value="${editing?esc(e.serial):''}" placeholder="e.g. CEU-CL1-PC-107"></div>
@@ -763,8 +937,8 @@ function openEquipmentForm(id){
           </select></div>
         </div>
         <div class="field-row">
-          <div class="field"><label>Date Acquired</label><input type="date" id="f-acquired" required value="${editing?e.dateAcquired:''}"></div>
-          <div class="field"><label>Last Maintenance</label><input type="date" id="f-maint" required value="${editing?e.lastMaintenance:todayISO()}"></div>
+          <div class="field"><label>Date Acquired</label><input type="date" id="f-acquired" min="2000-01-01" max="${todayISO()}" required value="${editing?e.dateAcquired:''}"></div>
+          <div class="field"><label>Last Maintenance</label><input type="date" id="f-maint" min="2000-01-01" max="${todayISO()}" required value="${editing?e.lastMaintenance:todayISO()}"></div>
         </div>
         <div class="field"><label>Notes</label><textarea id="f-notes" rows="3" placeholder="Optional remarks…">${editing?esc(e.notes||''):''}</textarea></div>
       </div>
@@ -971,6 +1145,10 @@ async function saveIncidentUpdate(id){
     });
     if (!response.success || !response.data) throw new Error(response.message || 'Unable to update incident');
     Object.assign(i,response.data);
+    if(response.data.equipmentStatus){
+      const equipment = DB.equipment.find(e=>e.id===i.equipmentId);
+      if(equipment) equipment.status = response.data.equipmentStatus;
+    }
   } catch (err) {
     console.error('ICTRAX: remote incident update failed.', err);
     toast('Incident was not updated in the database','bad');
@@ -1001,6 +1179,26 @@ async function deleteIncident(id){
 /* ============================================================
    ADMIN — Risk Analytics
    ============================================================ */
+async function openRiskDetails(id){
+  const equipment = DB.equipment.find(e=>e.id===id);
+  if(!equipment) return;
+  openModal(`<div class="modal-head"><div><h3>${esc(equipment.name)}</h3><div class="modal-sub">${esc(equipment.id)} · Risk history</div></div><button class="modal-close" onclick="closeModal()">${icon('x')}</button></div><div class="modal-body"><div class="page-loading">Loading score details...</div></div>`);
+  try {
+    const response = await apiRequest('audit.php?limit=250');
+    const audit = response.data || [];
+    const breakdown = riskBreakdown(equipment);
+    const incidents = getIncidentsFor(equipment.id).sort((a,b)=>new Date(b.dateReported)-new Date(a.dateReported));
+    const equipmentHistory = audit.filter(row=>row.entity_type==='equipment' && row.entity_id===id);
+    const incidentIds = new Set(incidents.map(i=>i.id));
+    const incidentHistory = audit.filter(row=>row.entity_type==='incident' && incidentIds.has(row.entity_id));
+    const factorRows = [['Current status',breakdown.status,25],['Incident history',breakdown.incidents,35],['Recent incident trend',breakdown.trend,15],['Equipment age',breakdown.age,15],['Maintenance staleness',breakdown.maintenance,15],['Condition',breakdown.condition,10],['Criticality',breakdown.criticality,10]];
+    if(breakdown.riskFloor) factorRows.push([breakdown.total>=75?'Severe age + condition + maintenance floor':'Poor condition + overdue maintenance floor',breakdown.riskFloor,'']);
+    const panel = $('#modal-panel');
+    panel.querySelector('.modal-body').innerHTML = `<div class="risk-detail-score"><div class="stat-value">${breakdown.total}/100</div>${riskBar(breakdown.total)}</div><div class="divider-label">Why this score</div><ul style="margin:0 0 14px;padding-left:20px;color:var(--text-700)">${riskReasons(equipment,breakdown).map(reason=>`<li style="margin:4px 0">${esc(reason)}</li>`).join('')}</ul><div class="divider-label">Score contribution</div><div class="kv-list">${factorRows.map(([label,value,max])=>`<div class="kv-row"><span class="k">${label}</span><span class="v">${value}${max?`/${max}`:''}</span></div>`).join('')}</div><div class="divider-label">Incident history</div>${incidents.length?`<div style="display:grid;gap:8px">${incidents.map(i=>`<div style="padding:10px;border-radius:7px;background:var(--surface-sunk)"><div style="display:flex;justify-content:space-between;gap:8px"><strong>${esc(i.id)} · ${esc(i.category)}</strong>${badge(i.status)}</div><div class="cell-sub">${fmtDate(i.dateReported)} · ${esc(i.priority)} priority</div><div style="margin-top:5px;font-size:13px">${esc(i.description)}</div>${i.remarks?`<div class="cell-sub" style="margin-top:5px">Note: ${esc(i.remarks)}</div>`:''}</div>`).join('')}</div>`:emptyState('inbox','No incident history','No incident reports are linked to this unit.') }<div class="divider-label">Equipment status history</div>${equipmentHistory.length?`<div style="display:grid;gap:8px">${equipmentHistory.map(row=>`<div style="padding:10px;border-radius:7px;background:${row.action==='delete'?'var(--red-tint)':row.action==='update'?'var(--amber-tint)':'var(--teal-tint)'}"><strong>${esc(row.action)}</strong> · ${esc(row.username||'System')}<div class="cell-sub">${esc(row.created_at)}</div><div style="font-size:13px;margin-top:5px">${esc(JSON.stringify(row.details||{}))}</div></div>`).join('')}</div>`:emptyState('clock','No status history','No administrative changes are recorded for this unit yet.') }${incidentHistory.length?`<div class="divider-label">Incident change history</div><div style="display:grid;gap:8px">${incidentHistory.map(row=>`<div style="padding:10px;border-radius:7px;background:var(--surface-sunk)"><strong>${esc(row.entity_id)}</strong> · ${esc(row.username||'System')}<div class="cell-sub">${esc(row.created_at)} · ${esc(row.action)}</div></div>`).join('')}</div>`:''}`;
+  } catch(err) {
+    $('#modal-panel .modal-body').innerHTML = emptyState('alert','Unable to load details',err.message);
+  }
+}
 function renderRiskView(){
   const risks = DB.equipment.filter(e=>e.status!=='Decommissioned').map(e=>({e,score:calcRisk(e)})).sort((a,b)=>b.score-a.score);
   const bands = {Critical:0,High:0,Medium:0,Low:0};
@@ -1027,7 +1225,7 @@ function renderRiskView(){
     <div class="card" style="margin-top:18px">
       <div class="card-head"><div><h3>Equipment Risk Ranking</h3><div class="sub">Highest score first</div></div></div>
       <div class="card-body flush"><div class="table-wrap"><table class="dtable">
-        <thead><tr><th>Tag ID</th><th>Equipment</th><th>Status</th><th>Age</th><th>Last Maintenance</th><th>Risk Score</th></tr></thead>
+        <thead><tr><th>Tag ID</th><th>Equipment</th><th>Status</th><th>Age</th><th>Last Maintenance</th><th>Risk Score</th><th></th></tr></thead>
         <tbody>
         ${risks.map(r=>{
           const ageYears = ((NOW-new Date(r.e.dateAcquired))/(365.25*86400000)).toFixed(1);
@@ -1038,6 +1236,7 @@ function renderRiskView(){
             <td>${ageYears} yrs</td>
             <td>${fmtDate(r.e.lastMaintenance)}</td>
             <td>${riskBar(r.score)}</td>
+            <td><button class="icon-btn" title="View score details and history" onclick="openRiskDetails('${r.e.id}')">${icon('eye')}</button></td>
           </tr>`;
         }).join('')}
         </tbody>
@@ -1269,7 +1468,7 @@ function renderReportView(){
             <div class="field"><label>Issue Type</label><select id="rf-category" required>
               ${['Damaged','Malfunctioning','Missing','Other'].map(c=>`<option>${c}</option>`).join('')}
             </select></div>
-            <div class="field"><label>Date Noticed</label><input type="date" id="rf-date" value="${todayISO()}" required></div>
+            <div class="field"><label>Date Noticed</label><input type="date" id="rf-date" min="2000-01-01" max="${todayISO()}" value="${todayISO()}" required></div>
           </div>
           <div class="field"><label>Description</label><textarea id="rf-desc" rows="4" required placeholder="What happened? Be as specific as you can — error messages, sounds, timing…"></textarea></div>
           <div class="field-row">
@@ -1350,6 +1549,7 @@ const VIEWS = {
   dashboard:()=> state.user.role==='admin' ? renderAdminDashboard() : renderStudentDashboard(),
   equipment: renderEquipmentView,
   incidents: renderIncidentsView,
+  audit: renderAuditView,
   risk: renderRiskView,
   reports: renderReportsView,
   browse: renderBrowseView,
