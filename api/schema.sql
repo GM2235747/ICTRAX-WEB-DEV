@@ -113,3 +113,4 @@ VALUES
 ('admin.tech', '$2y$10$9ydj3pKDjwCAuFz.Lqw2gO3/XP/ebfntK4XDdMcaLMVvPt2TQ2mdu', 'admin', 'Ramon Cruz', 'ICT Laboratory Technician', 'RC', NULL, NULL),
 ('jdelacruz', '$2y$10$3ynLnhoJFVKL.oboJEjKquh9v49F8IpG3HuFRw8J0Jq9O9DQBO3UO', 'student', 'Juan Dela Cruz', NULL, 'JD', '22-10045', 'BSIT-3A')
 ON DUPLICATE KEY UPDATE username = username;
+
