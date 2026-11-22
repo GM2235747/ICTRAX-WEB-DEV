@@ -1,0 +1,10 @@
+# ICTRAX server/vhost directives that cannot be enforced from .htaccess.
+# Place these in Apache's main server configuration (outside .htaccess), then
+# run `httpd -t` and restart Apache. Do not paste them inside .htaccess.
+
+TraceEnable Off
+ServerTokens Prod
+ServerSignature Off
+
+# The ICTRAX document root still needs AllowOverride FileInfo AuthConfig Limit
+# (or AllowOverride All) for the repository .htaccess controls to be active.

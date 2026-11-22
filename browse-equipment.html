@@ -3,10 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#2c296e">
 <title>ICTRAX | Browse Equipment — CEU Malolos</title>
+<link rel="icon" type="image/png" href="assets/icons_images/web_icon.png">
+<link rel="apple-touch-icon" href="assets/icons_images/web_icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/css/styles.css">
+<link rel="stylesheet" href="assets/css/styles.css?v=20261110-equipment-no-icon-v1">
+<link rel="stylesheet" href="assets/css/ceu-theme.css?v=20261110-equipment-no-icon-v1">
 </head>
 <body data-page="browse">
 <div id="app-shell">
@@ -14,13 +18,15 @@
   <div id="main-col">
     <header id="topbar">
       <div class="page-title"><div class="crumb" id="topbar-crumb">Overview</div><h1 id="topbar-title">Dashboard</h1></div>
-      <div class="top-actions"><div class="clock" id="live-clock">--</div></div>
+      <div class="top-actions"></div>
     </header>
     <main id="view-root"><div class="page-loading">Loading ICTRAX…</div></main>
   </div>
 </div>
-<div id="modal-root"><div class="modal-backdrop" onclick="closeModal()"></div><div class="modal-panel" id="modal-panel"></div></div>
+<div id="modal-root" aria-hidden="true"><div class="modal-backdrop" onclick="closeModal()"></div><div class="modal-panel" id="modal-panel"></div></div>
 <div id="toast-root"></div>
-<script src="script.js?v=20260919"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js" integrity="sha512-r6rDA7W6ZeQhvl8S7yRVQUKVHdexq+GAlNkNNqVC7YyIV+NwqCTJe2hDWCiffTyRNOeGEzRRJ9ifvRm/HCzGYg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="assets/js/ictrax-qrcode.js"></script>
+<script src="script.js?v=20261110-equipment-no-icon-v1"></script>
 </body>
 </html>

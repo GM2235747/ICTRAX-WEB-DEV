@@ -1,0 +1,6 @@
+tmp/
+uploads/
+
+# Local runtime and secret files
+api/google auth.txt
+api/google-auth-local.php

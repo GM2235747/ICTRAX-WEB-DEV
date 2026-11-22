@@ -1,0 +1,76 @@
+Options -Indexes
+DirectoryIndex index.html
+
+<LimitExcept GET POST PUT PATCH DELETE OPTIONS HEAD>
+    Require all denied
+</LimitExcept>
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # TRACE/TRACK can reflect authentication headers and are not used here.
+    RewriteCond %{REQUEST_METHOD} ^(?:TRACE|TRACK)$ [NC]
+    RewriteRule ^ - [F,L]
+
+    # The legacy superadmin portal used an obsolete authentication flow and is
+    # intentionally unavailable. Keep every related page/API denied even if a
+    # stale deployment or backup accidentally restores one of these files.
+    RewriteRule "(^|/)(?:superadmin(?:-[^/]+)?\.html|api/(?:superadmin-login|admin-management)\.php)$" - [F,L,NC]
+
+    # Keep repositories, local agent metadata, backups, and other dot-artifacts
+    # outside the HTTP attack surface. .well-known remains available for TLS.
+    RewriteRule "(^|/)(?:backup|deploy|tests|uploads|\.git|\.agents|\.codex)(?:/|$)" - [F,L,NC]
+    RewriteRule "(^|/)\.(?!well-known(?:/|$))" - [F,L,NC]
+</IfModule>
+
+# Database scripts, notes, logs, environment files, and backups are deploy-time
+# artifacts rather than public website content.
+<FilesMatch "(?i)\.(?:sql|txt|log|ini|env|bak|old|orig|dist|md)$">
+    Require all denied
+</FilesMatch>
+
+# These PHP files are includes only. Apache access controls complement their
+# own direct-execution guards without interfering with require/include.
+<FilesMatch "(?i)^(?:config|google-auth-config|incident-repair-form|migrate_request_repair_storage)\.php$">
+    Require all denied
+</FilesMatch>
+
+<IfModule mod_headers.c>
+    # PHP and Apache may both set critical headers. Clear the normal response
+    # table before setting the final always-on value to avoid duplicates.
+    Header onsuccess unset X-Content-Type-Options
+    Header onsuccess unset X-Frame-Options
+    Header onsuccess unset Referrer-Policy
+    Header onsuccess unset Permissions-Policy
+    Header onsuccess unset Strict-Transport-Security
+    Header always unset X-Powered-By
+    Header always unset Server
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "DENY"
+    Header always set Referrer-Policy "no-referrer"
+    Header always set X-Permitted-Cross-Domain-Policies "none"
+    Header always set X-Robots-Tag "noindex, nofollow, noarchive"
+    Header always set Cross-Origin-Opener-Policy "same-origin-allow-popups"
+    Header always set Cross-Origin-Resource-Policy "same-origin"
+    Header always set Origin-Agent-Cluster "?1"
+    Header always set Permissions-Policy "camera=(self), microphone=(), geolocation=(), payment=(), usb=()"
+
+    # The existing UI uses inline event handlers/styles. Google Identity,
+    # Google Fonts, and the pinned QR scanner CDN are the only remote sources.
+    Header always set Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://accounts.google.com https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https://accounts.google.com https://*.googleusercontent.com; connect-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; worker-src 'self' blob:; media-src 'self' blob:; manifest-src 'self'"
+
+    # HSTS is unsafe on plain HTTP development hosts, so emit it only after
+    # Apache has actually received an HTTPS request.
+    Header always set Strict-Transport-Security "max-age=31536000" "expr=%{HTTPS} == 'on'"
+
+    # Prevent authenticated API/page state from being recovered from browser,
+    # proxy, or back/forward caches after logout or a forced reload sign-out.
+    <FilesMatch "(?i)\.(?:php|html|js)$">
+        Header onsuccess unset Cache-Control
+        Header onsuccess unset Pragma
+        Header onsuccess unset Expires
+        Header always set Cache-Control "no-store, no-cache, must-revalidate, max-age=0, private"
+        Header always set Pragma "no-cache"
+        Header always set Expires "0"
+    </FilesMatch>
+</IfModule>

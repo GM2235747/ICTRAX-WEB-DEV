@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#2c296e">
+<meta http-equiv="refresh" content="0; url=dashboard.html?view=archived">
+<title>ICTRAX | Archived Equipment</title>
+<link rel="icon" type="image/png" href="assets/icons_images/web_icon.png">
+<link rel="apple-touch-icon" href="assets/icons_images/web_icon.png">
+<link rel="stylesheet" href="assets/css/styles.css?v=20261110-equipment-no-icon-v1">
+<link rel="stylesheet" href="assets/css/ceu-theme.css?v=20261110-equipment-no-icon-v1">
+<script>
+(function(){
+  try{
+    var navigation=performance.getEntriesByType && performance.getEntriesByType('navigation')[0];
+    var reloaded=navigation ? navigation.type==='reload' : performance.navigation && performance.navigation.type===1;
+    if(reloaded) sessionStorage.setItem('ictrax_force_logout_on_arrival_v1',String(Date.now()));
+  }catch(error){}
+  window.location.replace('dashboard.html?view=archived');
+})();
+</script>
+</head>
+<body data-page="archive-redirect">
+<main class="portal-shell">
+  <section class="portal-card portal-card-auth" aria-labelledby="redirect-title">
+    <header class="portal-brand">
+      <img class="portal-logo" src="assets/icons_images/web_icon.png" alt="Centro Escolar University crest">
+      <div><div class="portal-kicker">Centro Escolar University · ICT Section</div><div class="portal-wordmark">ICTRAX</div></div>
+    </header>
+    <div class="portal-heading">
+      <div class="portal-eyebrow">Equipment archive</div>
+      <h1 id="redirect-title">Opening Archived Equipment</h1>
+      <p class="portal-copy">Taking you to the archived equipment workspace. <a href="dashboard.html?view=archived">Continue manually</a></p>
+    </div>
+  </section>
+</main>
+</body>
+</html>

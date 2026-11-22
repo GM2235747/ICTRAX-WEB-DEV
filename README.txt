@@ -1,4 +1,4 @@
-﻿ICTRAX
+ICTRAX
 Web-Based Equipment Monitoring System for ICT Resources
 Centro Escolar University Malolos - 2026
 
